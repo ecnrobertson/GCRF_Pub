@@ -1,0 +1,286 @@
+---
+title: "01_body_size_corrections"
+author: "Erica Robertson"
+date: "2025-01-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir="~/Desktop/GCRF/GCRF_Pub/")
+```
+
+So I have a bunch of raw measurements from various traits. These traits are allometric, meaning they vary with body size. An additional layer of complexity is that, because birds are sexually dimorphic and change appearance and traits over time, I have sex and age as confounding variables. So, the goal is to correct for body size while accounting for sex and age. To do that, I'm going to run a linear regression on each trait and pull out the residuals. The model will look like this:
+
+lm(trait~body_size+age+sex)
+
+Things to thing about when running a linear regression:
+1. model assumptions
+  Linearity of residuals: linear relationship between the dependent and independent variables
+  Independence of residuals: no visible patterns
+  Normal distribution of residuals: error terms a normally distributed
+  Equal variance of residuals: error terms have constant variance
+2. how good is the fit
+  R^2 value, 0 to 1 with 1 being a perfect fit
+  
+Specific issues for a multiple linear regression:
+1. overfitting: adding too many independent variables
+2. multicollinearity: independent variables are correlated with each other
+3. feature selection: selecting the optimal set of predictors
+
+The goal here is to be able to have values that I can plug into a t-test to see if the values are different between the two populations for a give trait.
+
+The first thing I'm going to do, which will hopefully help with the multiple linear regression issues is to run an AIC model. This should tell me what combination of tarsus (my body size proxy, age and sex is the best).
+
+```{r, echo=FALSE}
+library(MuMIn)
+library(AICcmodavg)
+library(lme4)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(rcompanion)
+library(ggpubr)
+```
+
+Load in the data and make the categorical variables into factors
+```{r, label="importing the data"}
+morpho <- read.csv("data/raw_GCRF_data_all_morpho.csv")
+head(morpho)
+
+morpho$site_code <- as.factor(morpho$site_code)
+morpho$sex <- as.factor(morpho$sex)
+morpho$age <- as.factor(morpho$age)
+morpho$wing_chord <- as.numeric(morpho$wing_chord)
+
+traits <- colnames(morpho)
+traits <- traits[7:19]
+print(traits)
+```
+
+Variable distribution and transformation
+```{r}
+for (n in 1:length(traits)){
+  trait <- traits[n]
+  plotNormalHistogram(morpho[[trait]], main = paste("Histogram of", trait), xlab = trait)
+
+  trait_sqrt=sqrt(morpho[[trait]])
+  plotNormalHistogram(trait_sqrt, main = paste("Histogram of", trait," sqrt"), xlab = trait)
+  
+  qqnorm(trait_sqrt)
+  qqline(trait_sqrt, 
+       col="red")
+}
+```
+
+
+Although the dependent variable does not need to be normally distributed for a linear regression, it's a good thing to check in general.
+
+So let go ahead and set up a list of all the candidate models...
+Again, out independent variables are tarsus, sex and age
+
+SKIP 2 because that's tarsus, so it's gonna have weird results...
+Also SKIPPING bristle_length, the measurements are wierd and I don't like the way the residuals are plotting
+```{r}
+n <- 13
+trait <- traits[n]
+model1 <- lm(morpho[[trait]] ~ tarsus, data=morpho)
+model2 <- lm(morpho[[trait]] ~ age, data=morpho)
+model3 <- lm(morpho[[trait]] ~ sex, data=morpho)
+model4 <- lm(morpho[[trait]] ~ tarsus + age, data=morpho)
+model5 <- lm(morpho[[trait]] ~ tarsus + sex, data=morpho)
+model6 <- lm(morpho[[trait]] ~ age + sex, data=morpho)
+model7 <- lm(morpho[[trait]] ~ tarsus + age + sex, data=morpho)
+model8 <- lm(morpho[[trait]] ~ tarsus * age, data=morpho)
+model9 <- lm(morpho[[trait]] ~ tarsus * sex, data=morpho)
+model10 <- lm(morpho[[trait]] ~ age * sex, data=morpho)
+model11 <- lm(morpho[[trait]] ~ tarsus * age * sex, data=morpho)
+model12 <- lm(morpho[[trait]] ~ tarsus + age * sex, data=morpho)
+model13 <- lm(morpho[[trait]] ~ tarsus * age + sex, data=morpho)
+```
+
+testing the AIC of all of the models
+```{r}
+all.models <- list(model1,model2,model3,model4,model5,model6,model7,model8,model9,model10,model11,model12,model13)
+
+all.models_AIC <- aictab(all.models, sort=T, second.ord=T)
+head(all.models_AIC)
+```
+1.wing_chord: model 12
+3.tail_length: model 9
+4.nare_length; model 13
+6.beak_depth: model 4 or 5
+7.beak_width: model 9
+8.beak_length: model 3
+9.pen_length: model 3
+10.pen_num: model 4 or 5
+11.plum_length: model 2 or 3
+12.plum_number: model 4
+13.nodes: basically model 5
+
+Now let's double check the assumptions for that model.
+```{r}
+par(mfrow = c(2, 2))
+plot(model5)
+```
+What I'm looking for (per https://www.sthda.com/english/articles/39-regression-model-diagnostics/161-linear-regression-assumptions-and-diagnostics-in-r-essentials/#building-a-regression-model)
+1. Residuals vs Fitted. Used to check the linear relationship assumptions. A horizontal line, without distinct patterns is an indication for a linear relationship, what is good.
+2. Normal Q-Q. Used to examine whether the residuals are normally distributed. It’s good if residuals points follow the straight dashed line.
+3. Scale-Location (or Spread-Location). Used to check the homogeneity of variance of the residuals (homoscedasticity). Horizontal line with equally spread points is a good indication of homoscedasticity.
+4. Residuals vs Leverage. Used to identify influential cases, that is extreme values that might influence the regression results when included or excluded from the analysis.
+
+Beak width models 4 & 5 don't look great on plots 1, 3, 4
+Beak length model 4 was the best but the plots look back, plots look better for model 1... but it's a categorical independent variable so it makes sense why the residuals are super clustered
+Same issue for pen_length
+Similar for pen_num and the rest of the feather traits, age and sex seem to be the only important stuff.
+
+Alrighty, well we've figured out what a good model is to take residuals of each trait! Now we just have to do it...
+
+```{r}
+# Define model formulas for each trait
+model_formulas <- list(
+  wing_chord = "wing_chord ~ tarsus + age * sex",
+  tail_length = "tail_length ~ tarsus * sex",
+  nare_length = "nare_length ~ tarsus * age + sex",
+  beak_depth = "beak_depth ~ tarsus + age",
+  beak_width = "beak_width ~ tarsus * sex",
+  culmen_end_length = "culmen_end_length ~ sex",
+  pen_length = "pen_length ~ sex",
+  pen_num = "pen_num ~ age",
+  plum_length = "plum_length ~ age",
+  plum_number = "plum_number ~ tarsus + age",
+  nodes = "nodes ~ tarsus + sex"
+)
+
+residual_list <- list()  # Store residuals dynamically
+all_results <- list()    # Store final dataframes
+n <- 1
+
+for (var in names(model_formulas)) {
+  formula <- as.formula(model_formulas[[var]])
+
+  # Run the model
+  lm_model <- lm(formula, data = morpho)
+
+  # Extract residuals and store in list
+  residual_list[[var]] <- lm_model$residuals
+
+  # Identify required variables from the formula
+  vars <- all.vars(formula)
+  
+  # Ensure band_number is always included
+  vars <- unique(c("band_number", vars))
+
+  # Filter and rename variables
+  df <- morpho %>%
+    select(all_of(vars)) %>%
+    na.omit() %>%
+    rename(variable = !!sym(var))
+  
+  # Add residuals to the dataframe
+  df[[paste0(var, "_res")]] <- residual_list[[var]]
+  
+  # Store the result for this trait
+  all_results[[var]] <- df
+
+  n <- n + 1
+}
+
+# Print or process `all_results` as needed
+all_results[1]
+
+residual_df <- data.frame(BGP_ID = morpho$BGP_ID,
+                          band_number = morpho$band_number,
+                          age = morpho$age,
+                          sex = morpho$sex,
+                          site_code=morpho$site_code)
+n=1
+
+for (var in names(model_formulas)){
+  res.df <- all_results[[n]] %>% select(band_number, paste0(var, "_res"))
+  
+  residual_df <- left_join(residual_df, res.df, by="band_number")
+  n=n+1
+}
+
+# View the final dataframe with band_number and all residuals
+head(residual_df)
+
+write.csv(residual_df, "results/stats_output/GCRF_residuals_all.csv", row.names = F, quote = F)
+```
+
+# Softer Correction
+
+So after running the above, I think I may have overcorrected. I discussed with CH and she agreed, so I'm going to run one where I just correct with the body size for each trait and that will be what goes into the GWAS. I will also include sex as a covariate in the GWAS, but as age and body size are probably strongly correlated, it's okay to leave out age in these models.
+
+```{r}
+model_formulas <- list(
+  wing_chord = "wing_chord ~ tarsus",
+  tail_length = "tail_length ~ tarsus",
+  nare_length = "nare_length ~ tarsus",
+  beak_depth = "beak_depth ~ tarsus",
+  beak_width = "beak_width ~ tarsus",
+  culmen_end_length = "culmen_end_length ~ tarsus",
+  pen_length = "pen_length ~ tarsus",
+  pen_num = "pen_num ~ tarsus",
+  plum_length = "plum_length ~ tarsus",
+  plum_number = "plum_number ~ tarsus",
+  nodes = "nodes ~ tarsus"
+)
+
+residual_list <- list()  # Store residuals dynamically
+all_results <- list()    # Store final dataframes
+n <- 1
+
+for (var in names(model_formulas)) {
+  formula <- as.formula(model_formulas[[var]])
+
+  # Run the model
+  lm_model <- lm(formula, data = morpho)
+
+  # Extract residuals and store in list
+  residual_list[[var]] <- lm_model$residuals
+
+  # Identify required variables from the formula
+  vars <- all.vars(formula)
+  
+  # Ensure band_number is always included
+  vars <- unique(c("band_number", vars))
+
+  # Filter and rename variables
+  df <- morpho %>%
+    select(all_of(vars)) %>%
+    na.omit() %>%
+    rename(variable = !!sym(var))
+  
+  # Add residuals to the dataframe
+  df[[paste0(var, "_res")]] <- residual_list[[var]]
+  
+  # Store the result for this trait
+  all_results[[var]] <- df
+
+  n <- n + 1
+}
+
+# Print or process `all_results` as needed
+all_results[1]
+
+residual_df <- data.frame(BGP_ID = morpho$BGP_ID,
+                          band_number = morpho$band_number,
+                          age = morpho$age,
+                          sex = morpho$sex,
+                          site_code=morpho$site_code)
+n=1
+
+for (var in names(model_formulas)){
+  res.df <- all_results[[n]] %>% select(band_number, paste0(var, "_res"))
+  
+  residual_df <- left_join(residual_df, res.df, by="band_number")
+  n=n+1
+}
+
+head(residual_df)
+nrow(residual_df)
+
+write.csv(residual_df, "results/stats_output/GCRF_residuals_all_soft.csv", row.names = F, quote = F)
+```

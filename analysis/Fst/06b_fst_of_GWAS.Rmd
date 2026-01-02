@@ -1,0 +1,52 @@
+---
+title: "06b_fst_of_GWAS"
+author: "Erica Robertson"
+date: "2025-02-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir="~/Desktop/GCRF/GCRF_Pub")
+```
+
+Now that we have fst values and SNP that came up in the bslmm and lmm models, let's go ahead and figure out the fst values for those SNPs.
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(dplyr)
+```
+
+```{r}
+lmm_snps <- read.csv("results/lmm_results/lmm_summary_outliers_0.5_soft.csv") %>% select(rs, trait)
+bslmm_snps <- read.csv("results/bslmm_results/summary_pip0.01_0.5_soft.csv") %>% select(rs, trait)
+
+fst_values <- fread("analysis/Fst/OutFLANK_output/OutFLANK_fst_results_0.005.csv")
+```
+
+```{r}
+lmm_snps <- left_join(lmm_snps, fst_values %>% select(rs, FST, OutlierFlag), by="rs")
+write.csv(lmm_snps, "results/lmm_results/lmm_snps_0.5_fst_new.csv")
+
+bslmm_snps <- left_join(bslmm_snps, fst_values %>% select(rs, FST, OutlierFlag), by="rs")
+write.csv(bslmm_snps ,"results/bslmm_results/bslmm_snps_0.5_fst_new.csv")
+```
+
+
+# SOFT
+```{r}
+lmm_snps <- read.csv("results/lmm_results/lmm_summary_outliers_0.8_soft.csv") %>% select(rs, trait)
+bslmm_snps <- read.csv("results/bslmm_results/summary_pip0.05_0.8_soft.csv") %>% select(rs, trait)
+
+fst_values <- fread("analysis/Fst/OutFLANK_output/OutFLANK_fst_results_0.005.csv")
+```
+
+```{r}
+lmm_snps <- left_join(lmm_snps, fst_values %>% select(rs, FST, OutlierFlag), by="rs")
+write.csv(lmm_snps, "results/lmm_results/lmm_snps_0.8_fst_soft.csv")
+
+bslmm_snps <- left_join(bslmm_snps, fst_values %>% select(rs, FST, OutlierFlag), by="rs")
+write.csv(bslmm_snps ,"results/bslmm_results/bslmm_snps_0.8_fst_soft.csv")
+```
+

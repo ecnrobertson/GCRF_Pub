@@ -1,0 +1,104 @@
+---
+title: "02_enviro_exploration"
+author: "Erica Robertson"
+date: "2025-11-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir="~/Library/CloudStorage/OneDrive-Colostate/GCRF_Pub/")
+```
+
+```{r}
+library(terra)
+library(tidyverse)
+```
+
+# environmental data
+## extracting the data
+```{r}
+points <- data.frame(
+  lon = c(-118.255386, -118.687127),
+  lat = c(37.634902, 37.223629),
+  site = c("White Mountains", "Piute Pass")
+)
+
+# Convert to spatial object and project
+sites <- vect(points, geom = c("lon", "lat"), crs = "EPSG:4326")
+sites <- project(sites, merged)
+
+# Make individual 1-km buffers per site
+buffers <- buffer(sites, width = 1000)
+
+# Helper function to extract means for each variable set
+extract_means <- function(file_list, sites_buffer, var_name) {
+  allrasters <- lapply(file_list, rast)
+  
+  map_dfr(1:length(allrasters), function(i) {
+    extracted <- terra::extract(allrasters[[i]], sites_buffer, xy = TRUE)
+    
+    val_col <- names(extracted)[2]
+    
+    extracted %>%
+      group_by(ID) %>%
+      summarise(mean_value = mean(.data[[val_col]], na.rm = TRUE)) %>%
+      mutate(
+        raster = i,
+        site = points$site[ID],
+        variable = var_name
+      )
+  })
+}
+```
+
+```{r}
+Tave_file_list <- c("analysis/environment/Normal_1991_2020/Normal_1991_2020_monthly/Normal_1991_2020_Tave06.tif", "analysis/environment/Normal_1991_2020/Normal_1991_2020_monthly/Normal_1991_2020_Tave07.tif", "analysis/environment/Normal_1991_2020/Normal_1991_2020_monthly/Normal_1991_2020_Tave08.tif")
+Tmax_file_list <- c("analysis/environment/Normal_1991_2020/Normal_1991_2020_monthly/Normal_1991_2020_Tmax06.tif", "analysis/environment/Normal_1991_2020/Normal_1991_2020_monthly/Normal_1991_2020_Tmax07.tif", "analysis/environment/Normal_1991_2020/Normal_1991_2020_monthly/Normal_1991_2020_Tmax08.tif")
+Tmin_file_list <- c("analysis/environment/Normal_1991_2020/Normal_1991_2020_monthly/Normal_1991_2020_Tmin06.tif", "analysis/environment/Normal_1991_2020/Normal_1991_2020_monthly/Normal_1991_2020_Tmin07.tif", "analysis/environment/Normal_1991_2020/Normal_1991_2020_monthly/Normal_1991_2020_Tmin08.tif")
+
+Tave_results <- extract_means(Tave_file_list, buffers, "Tave")
+Tmax_results <- extract_means(Tmax_file_list, buffers, "Tmax")
+Tmin_results <- extract_means(Tmin_file_list, buffers, "Tmin")
+
+env.results <- rbind(Tave_results, Tmax_results, Tmin_results)
+```
+## all together now...
+
+```{r}
+library(dplyr)
+
+summary_df <- env.results %>%
+  group_by(variable, site) %>%
+  summarise(
+    mean_overall = mean(mean_value, na.rm = TRUE),
+    sd_overall   = sd(mean_value, na.rm = TRUE),
+    min_value    = min(mean_value),
+    max_value    = max(mean_value)
+  )
+summary_df
+
+write.csv(summary_df, "br_enviro.csv")
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(env.results, aes(x = raster, y = mean_value,
+                        color = variable,
+                        group = interaction(variable, site),
+                        linetype = site)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = 1:3, labels = c("Jun", "Jul", "Aug")) +
+  scale_linetype_manual(values = c("Piute Pass" = "solid", "White Mountains" = "dashed")) +
+  labs(
+    x = "Month",
+    y = "Mean value",
+    title = "Monthly Climate Averages",
+    color = "Variable",
+    linetype = "Site"
+  ) +
+  theme_minimal(base_size = 14)
+
+```

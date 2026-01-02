@@ -1,0 +1,280 @@
+---
+title: "04_multivariate_trait_comparison"
+author: "Erica Robertson"
+date: "2025-10-30"
+output: html_document
+---
+
+Updated workflow for evaluating trait differences, per reviewer comments that including a multivariate trait comaprison (which accounts for correlation between the traits) is a good idea.
+
+```{r}
+library(MASS)
+library(car)
+library(ggplot2)
+library(tidyverse)
+library(rstatix)
+library(ggpubr)
+```
+
+# CONTROLLING FOR BODY SIZE DIFFERENCES
+So, I want information on if the traits are different between the populations while controlling for the allometric effects of body size on said traits. There are two ways to do this and I would like to try both. The first method is pretty standard for bird studies and that is to use tarsus length as a proxy for body size. This is generally well supported but may, in fact, not be the best proxy in the case of my bird. Tim did a quick analysis that showed a pretty low R2 value for mass to tarsus. Mass itself is a terrible proxy. Another option is to run a PCA on all the traits, pull out PC1 (which should represent the overall body size) and then use that as your body size covariate. I'll try both the tarsus and PC1 approach and see how different the results are.
+
+```{r}
+morpho <- read.csv("../../data/raw_GCRF_data_all_morpho.csv") %>% select(-X)
+head(morpho)
+```
+
+So, I think let's use wing chord, tarsus, tail length, beak length, beak depth in the PC as those are all the most obviously allometric traits.
+
+Let's clean up and explore the morpho data a bit.
+```{r}
+str(morpho)
+table(morpho$site_code)
+morpho_sub <- morpho %>%
+  filter(site_code %in% c("PIPA", "WMTN"))
+table(morpho_sub$site_code)
+morpho_sub$site_code <- as.factor(morpho_sub$site_code)
+morpho_sub$sex <- as.factor(morpho_sub$sex)
+morpho_sub$age <- as.factor(morpho_sub$age)
+summary(morpho_sub)
+
+morpho_sub %>%
+  filter(site_code=="WMTN") %>%
+  summary()
+  
+morpho_sub %>%
+  group_by(site_code) %>%
+  summarise(
+    across(where(is.numeric), list(
+      mean  = ~mean(.x, na.rm = TRUE),
+      sd    = ~sd(.x, na.rm = TRUE),
+      n     = ~sum(!is.na(.x)),
+      range = ~paste0(round(range(.x, na.rm = TRUE), 2), collapse = "–")
+    ), .names = "{.col}_{.fn}"),
+    across(where(is.factor), ~paste0(levels(.x), " (n=", table(.x), ")", collapse = ", "))
+  )
+
+```
+
+I also want to check on the missingness to try and see what to do there...
+```{r}
+size_vars <- c("wing_chord","tarsus","tail_length","beak_depth", "beak_width", "culmen_end_length")
+colSums(is.na(morpho_sub[, size_vars]))
+sum(complete.cases(morpho_sub[, size_vars]))
+```
+
+So, I think, for this it would be best to just drop those individuals that are missing any information. PCA can't handle missing data. That's one potential strength of the univariate models, I was able to have a larger sample size.
+
+Okay, time to dig in. Our sample size for this is 136 individuals.
+```{r}
+morpho.nona <- morpho_sub %>%
+  select(band_number,site_code,all_of(size_vars)) %>%
+  drop_na()
+
+pca_data <- morpho.nona %>% select(-site_code, -band_number)
+#just keeping the rownames as the band_number so I don't lose track of who is who
+rownames(pca_data) <- morpho.nona$band_number
+
+#centers & scale variables
+pca_size <- prcomp(pca_data, center = TRUE, scale. = TRUE)
+summary(pca_size)
+
+pca_summary <- summary(pca_size)
+var_explained <- pca_summary$importance[2, ] * 100   # % variance
+
+barplot(var_explained,
+        main = "Percent Variance Explained by PCs",
+        ylab = "Percent Variance Explained",
+        xlab = "Principal Component",
+        col = "steelblue")
+```
+
+This is pretty good, PC1 is getting 34% of the variance in body size, and PC1 and 2 together are 63%.
+
+```{r}
+#check loadings to ensure PC1 represents size
+pca_size$rotation[,1]
+pca_size$rotation[,2]
+```
+
+Also good sign. Wing chord, tarsus, and tail length are all heavily positively weighted. Then the beak traits are weighted but much less so. This suggests that PC1 is actually pretty good for body size and isn't overrepresenting beak size too.
+
+When we look at PC2 we see that the body traits actually go negative and it's overwhelming positive for the beak traits, so PC2 is capturing beak size more.
+
+So, we'll use PC1.
+```{r}
+#get the scores for PC1
+morpho.nona$PC1_size <- pca_size$x[,1]
+```
+
+```{r}
+# quick plot of PC1 by site_code
+ggplot(morpho.nona, aes(x = site_code, y = PC1_size)) + geom_boxplot() + geom_jitter(width=0.15)
+t.test(PC1_size ~ site_code, data=morpho.nona)
+```
+Way more size variation in PIPA, and a slightly higher PC1 value too.
+
+```{r}
+cor(morpho.nona$tarsus, morpho.nona$PC1_size)
+
+summary(lm(PC1_size~tarsus, data=morpho.nona))
+```
+
+# MANOVA COMPARISON OF SITES
+Alrightly, let's run a MANCOVA on all the traits. Using MANCOVA instead of MANOVA because I'm including PC1 as a covariate the correct for body size.
+Question: do traits (beak traits + wing traits) vary between two sites while accounting for PC1?
+Hypothesis: expect to see bigger traits in the warmer site, PIPA.
+
+```{r}
+#only running this on the individuals where we have PC1 values, so narrowing down the original morpho (which has the response variables in it) to just those from the pca above.
+
+morpho.mlv <- morpho %>% filter(band_number %in% morpho.nona$band_number)
+colnames(morpho.mlv)
+#just focusing on the body traits right now
+response_vars <- c("wing_chord","tarsus","nare_length","beak_depth","beak_width","culmen_end_length")
+summary(morpho.mlv[,response_vars])
+morpho.mlv$PC1_size <- pca_size$x[,1]
+```
+
+## checking some assumptions
+So, there are lots of assumptions for MANOVA tests. Let's check them if the data fits them.
+
+```{r}
+morpho.mlv %>%
+  group_by(site_code) %>%
+  summarise(N=n())
+```
+So, this should be okay for sample sizes. We want more samples than the number of outcome variable, which is 6. Also, we can assume these are all independent and randomly sample, ie no repeated measurements.
+
+Let's check for outliers.
+Univariate:
+```{r}
+#going through all 6 response variables
+morpho.mlv %>%
+  group_by(site_code) %>%
+  identify_outliers(response_vars[6])
+```
+
+Multivariate:
+```{r}
+colnames(morpho.mlv)
+morpho.mlv %>%
+  group_by(site_code) %>%
+  mahalanobis_distance(all_of(response_vars)) %>%
+  filter(is.outlier==TRUE) %>%
+  as.data.frame()
+```
+
+While there are some outliers, none of them are extreme, so I'm going to leave them in. There is potentially one multivariate outlier, so I'll run the MANCOVA with and without 23N00510 just to check that it's not sceewing anything. It seems to have a really large (110) wing chord, and is in PIPA.
+
+Checking normality... not super worried about this as MANOVA is pretty okay with non-normal data but could run it with transformed and not tranformed to check.
+```{r}
+morpho.mlv %>%
+  group_by(site_code) %>%
+  shapiro_test(response_vars) %>%
+  arrange(variable) %>%
+  filter(p<=0.05)
+```
+
+Looks like some variables aren't normal... let's add transformed data and check again.
+```{r}
+morpho.mlv$log_beak_depth <- log(morpho.mlv$beak_depth)
+morpho.mlv$log_culmen_end_length <- log(morpho.mlv$culmen_end_length)
+morpho.mlv$log_nare_length <- log(morpho.mlv$nare_length)
+morpho.mlv$log_wing_chord <- log(morpho.mlv$wing_chord)
+```
+
+And multivariate normality.
+```{r}
+morpho.mlv %>%
+  select(response_vars) %>%
+  mshapiro_test()
+```
+Oops, that's bad.
+
+## running the model
+
+### non transformed
+With all.
+```{r}
+#building the formula so it's all tidy cbind(...) ~ site_code + PC1_size
+manova_formula <- as.formula(paste0("cbind(", paste(response_vars, collapse=","), ") ~ site_code + PC1_size"))
+manova_fit <- manova(manova_formula, data = morpho.mlv)
+
+summary(manova_fit, test = "Pillai")
+```
+Without outlier...
+```{r}
+#removing 23N00510 by band_numbers
+morpho.mlv.out <- morpho.mlv[morpho.mlv$band_number != "2821-42614",]
+
+manova_formula <- as.formula(paste0("cbind(", paste(response_vars, collapse=","), ") ~ site_code + PC1_size"))
+manova_fit <- manova(manova_formula, data = morpho.mlv.out)
+
+summary(manova_fit, test = "Pillai")
+```
+Excitingly, initial glace is very similar to the univariate results! The outlier changed the p-value a touch but not significantly and the result is the same.
+
+### transformed
+```{r}
+response_vars
+response_vars.log <- c("log_wing_chord", "tarsus", "log_nare_length", "log_beak_depth", "beak_width", "log_culmen_end_length")
+manova_formula <- as.formula(paste0("cbind(", paste(response_vars.log, collapse=","), ") ~ site_code + PC1_size"))
+manova_fit <- manova(manova_formula, data = morpho.mlv)
+
+summary(manova_fit, test = "Pillai")
+```
+Same results.
+
+### all covariates
+```{r}
+#building the formula so it's all tidy cbind(...) ~ site_code + PC1_size
+manova_formula <- as.formula(paste0("cbind(", paste(response_vars, collapse=","), ") ~ site_code + PC1_size + age + sex"))
+manova_fit <- manova(manova_formula, data = morpho.mlv)
+
+summary(manova_fit, test = "Pillai")
+```
+
+### with tarsus
+```{r}
+response_vars.notar <- c("wing_chord","nare_length","beak_depth","beak_width","culmen_end_length")
+manova_formula <- as.formula(paste0("cbind(", paste(response_vars.notar, collapse=","), ") ~ site_code + tarsus + age + sex"))
+manova_fit.tar <- manova(manova_formula, data = morpho.mlv)
+
+manova_summary <- summary(manova_fit.tar, test = "Pillai")
+manova_summary
+```
+## feather traites with tarsus
+```{r}
+vars <- c("tarsus", "sex", "age","pen_length","pen_num","plum_length","plum_number","nodes")
+morpho.nona.f <- morpho_sub %>%
+  select(band_number,site_code,all_of(vars)) %>%
+  drop_na()
+colnames(morpho.nona.f)
+response_vars.notar <- c("pen_length","pen_num","plum_length","plum_number","nodes")
+manova_formula <- as.formula(paste0("cbind(", paste(response_vars.notar, collapse=","), ") ~ site_code + tarsus + age + sex"))
+manova_fit.tar <- manova(manova_formula, data = morpho.nona.f)
+
+manova_summary <- summary(manova_fit.tar, test = "Pillai")
+manova_summary
+```
+
+## post-hoc tests
+```{r}
+grouped.data <- morpho.mlv %>%
+  gather(key="variable", value="value", response_vars) %>%
+  group_by(variable)
+grouped.data %>% kruskal_test(value~site_code)
+grouped.data %>% anova_test(value~site_code)
+```
+
+# BODY SIZE COMPARISON
+
+```{r}
+model <- lm(PC1_size ~ age + sex + site_code, data=morpho.mlv)
+summary(model)
+
+model <- lm(tarsus ~ age + sex + site_code, data=morpho.mlv)
+summary(model)
+```
+

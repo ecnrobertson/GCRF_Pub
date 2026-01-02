@@ -1,0 +1,333 @@
+---
+title: "02_lms_with_site"
+author: "Erica Robertson"
+date: "2025-01-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir="~/Desktop/GCRF/GCRF_Pub/")
+```
+
+This is a follow up to 01_body_size_corrections.Rmd where I did linear models to correct for the effects of tarsus, age and sex on the allometric trait data I have for each bird. With the residuals from those models I'm going to run t-tests to see if there is a differences in each trait between the two sites WMTN and PIPA. Before doing that though I wanted to try running linear models with site_code included to see how that would change the results.
+
+```{r, label="importing the data"}
+morpho <- read.csv("data/raw_GCRF_data_all_morpho.csv")
+head(morpho)
+
+morpho$site_code <- as.factor(morpho$site_code)
+morpho$sex <- as.factor(morpho$sex)
+morpho$age <- as.factor(morpho$age)
+morpho$wing_chord <- as.numeric(morpho$wing_chord)
+
+traits <- colnames(morpho)
+traits <- traits[7:19]
+print(traits)
+```
+
+```{r, label="formula_options"}
+variables <- c("tarsus", "age", "sex", "site_code")
+formula_list <- c()
+
+# Generate additive and interaction terms
+for (i in 1:length(variables)) {
+  additive_combinations <- combn(variables, i, simplify = FALSE)
+  
+  # Add additive formulas
+  formula_list <- c(formula_list, sapply(additive_combinations, paste, collapse = " + "))
+  
+  # Add interaction formulas
+  formula_list <- c(formula_list, sapply(additive_combinations, paste, collapse = " * "))
+}
+
+# Print all unique formulas
+formula_list <- unique(formula_list)
+print(formula_list)
+```
+
+```{r, label="removing_extra_sites"}
+library(dplyr)
+library(tidyverse)
+morpho.2 <- morpho %>% filter(site_code %in% c("WMTN", "PIPA"))
+morpho.2$site_code <- as.factor(morpho.2$site_code)
+```
+
+```{r, label="running_models"}
+n <- 5
+#traits <- colnames(morpho)
+#traits <- traits[7:19]
+#print(traits)
+
+trait <- traits[n]
+print(trait)
+model1 <- lm(morpho.2[[trait]] ~ tarsus, data=morpho.2)
+model2 <- lm(morpho.2[[trait]] ~ age, data=morpho.2)
+model3 <- lm(morpho.2[[trait]] ~ sex, data=morpho.2)
+model4 <- lm(morpho.2[[trait]] ~ site_code, data=morpho.2)
+model5 <- lm(morpho.2[[trait]] ~ tarsus + age, data=morpho.2)
+model6 <- lm(morpho.2[[trait]] ~ tarsus + sex, data=morpho.2)
+model7 <- lm(morpho.2[[trait]] ~ tarsus + site_code, data=morpho.2)
+model8 <- lm(morpho.2[[trait]] ~ age + sex, data=morpho.2)
+model9 <- lm(morpho.2[[trait]] ~ age + site_code, data=morpho.2)
+model10 <- lm(morpho.2[[trait]] ~ sex + site_code, data=morpho.2)
+model11 <- lm(morpho.2[[trait]] ~ tarsus * age, data=morpho.2)
+model12 <- lm(morpho.2[[trait]] ~ tarsus * sex, data=morpho.2)
+model13 <- lm(morpho.2[[trait]] ~ tarsus * site_code, data=morpho.2)
+model14 <- lm(morpho.2[[trait]] ~ age * sex, data=morpho.2)
+model15 <- lm(morpho.2[[trait]] ~ age * site_code, data=morpho.2)
+model16 <- lm(morpho.2[[trait]] ~ sex * site_code, data=morpho.2)
+model17 <- lm(morpho.2[[trait]] ~ tarsus + age + sex, data=morpho.2)
+model18 <- lm(morpho.2[[trait]] ~ tarsus + age + site_code, data=morpho.2)
+model19 <- lm(morpho.2[[trait]] ~ tarsus + sex + site_code, data=morpho.2)
+model20 <- lm(morpho.2[[trait]] ~ age + sex + site_code, data=morpho.2)
+model21 <- lm(morpho.2[[trait]] ~ tarsus * age * sex, data=morpho.2)
+model22 <- lm(morpho.2[[trait]] ~ tarsus * age * site_code, data=morpho.2)
+model23 <- lm(morpho.2[[trait]] ~ tarsus * sex * site_code, data=morpho.2)
+model24 <- lm(morpho.2[[trait]] ~ age * sex * site_code, data=morpho.2)
+model25 <- lm(morpho.2[[trait]] ~ tarsus + age + sex + site_code, data=morpho.2)
+model26 <- lm(morpho.2[[trait]] ~ tarsus * age * sex * site_code, data=morpho.2)
+
+all.models <- list(model1,model2,model3,model4,model5,model6,model7,model8,model9,model10,model11,model12,model13,model14,model15,model16,model17,model18,model19,model20,model21,model22,model23,model24,model25,model26)
+
+library(AICcmodavg)
+all.models_AIC <- aictab(all.models, sort=T, second.ord=T)
+head(all.models_AIC)
+```
+
+testing the AIC of all of the models
+```{r, label="testing_AIC"}
+library(AICcmodavg)
+all.models <- list(model1,model2,model3,model4,model5,model6,model7,model8,model9,model10,model11,model12,model13,model14,model15,model16,model17,model18,model19,model20,model21,model22,model23,model24,model25,model26)
+
+all.models_AIC <- aictab(all.models, sort=T, second.ord=T)
+head(all.models_AIC)
+```
+
+1.wing_chord: model 25 tarsus + age + sex + site_code
+3.tail_length: model 19 tarsus + sex + site_code
+4.nare_length: model 19 tarsus + sex + site_code
+5.bristle_length: model 1 tarsus
+6.beak_depth: model 18 tarsus + age + site_code
+7.beak_width: model 19 tarsus + sex + site_code
+8.beak_length: model 3 sex
+9.pen_length: model 3 sex
+10.pen_num: model 5 tarsus + age
+11.plum_length: model 2 age
+12.plum_number: model 5 tarsus + age
+13.nodes: model 18 tarsus + age + site_code
+
+Interesting, earlier iterations using t-tests had wing_chord, nare_length, beak_width, and nodes as being significantly different between groups. This is also with the additional populations, so 5? total. Would this still be true if we filtered those out??
+
+1.wing_chord: model 25 tarsus + age + sex + site_code
+3.tail_length: model 12 tarsus * sex
+4.nare_length; model 19 tarsus + sex + site_code
+6.beak_depth: model 18 tarsus + age + site_code
+7.beak_width:  model 19 tarsus + sex + site_code
+8.beak_length: model 3 sex
+9.pen_length: model 3 sex
+10.pen_num: model 5 tarsus + age
+11.plum_length: model 9 age + site_code
+12.plum_number: model 5 tarsus + age
+13.nodes: model 18 tarsus + age + site_code
+
+```{r, label="summary_of_models"}
+wc.model <- summary(lm(wing_chord ~ tarsus + age + sex + site_code, data=morpho.2))
+wc.p <- wc.model$coefficients[6,4]
+wc.p
+
+tl.model <- summary(lm(tail_length ~ tarsus * sex, data=morpho.2))
+
+nl.model <- summary(lm(nare_length ~ tarsus + sex + site_code, data=morpho.2))
+nl.model
+nl.p <- nl.model$coefficients[5,4]
+
+bd.model <- summary(lm(beak_depth ~ tarsus + age + site_code, data=morpho.2))
+bd.p <- bd.model$coefficients[5,4]
+bd.p
+
+bw.model <- summary(lm(beak_width ~ tarsus + sex + site_code, data=morpho.2))
+bw.p <- bw.model$coefficients[5,4]
+
+cl.model <- summary(lm(culmen_end_length ~ sex, data=morpho.2))
+
+summary(lm(pen_length ~ sex, data=morpho.2))
+
+summary(lm(pen_num ~ tarsus + age, data=morpho.2))
+
+pl.model <- summary(lm(plum_length ~ age + site_code, data=morpho.2))
+
+summary(lm(plum_number ~ tarsus + age, data=morpho.2))
+
+no.model <- summary(lm(nodes ~ tarsus + age + site_code, data=morpho.2))
+no.p <- no.model$coefficients[5,4]
+
+pvals <- c(wc.p, nl.p, bd.p, bw.p, no.p)
+pvals.adjust <- p.adjust(pvals, method = "bonferroni")
+format(pvals.adjust, scientific = FALSE)
+```
+
+So basically what I'm getting for all this is that, for some trait, when accounting for age and tarsus and sex if appropriate, site code does have an effect! Specifically, it seems like wing_chord, nare_length, beak_depth, beak_width, plum_length and nodes all site_code as a valid predictor. For those trait, the results are as follows:
+
+*1. wing_chord*
+Coefficients: (1 not defined because of singularities)
+              Estimate Std. Error t value Pr(>|t|)    
+(Intercept)    67.5308     5.4991  12.280  < 2e-16 ***
+tarsus          1.4781     0.2793   5.292 3.91e-07 ***
+age3            0.9801     0.4216   2.325 0.021335 *  
+age4            2.6199     0.4748   5.518 1.35e-07 ***
+sexM            5.1836     0.3954  13.111  < 2e-16 ***
+sexUNK              NA         NA      NA       NA    
+site_codeWMTN  -1.1885     0.3406  -3.490 0.000624 ***
+
+Residual standard error: 2.133 on 161 degrees of freedom
+  (4 observations deleted due to missingness)
+Multiple R-squared:  0.6827,	Adjusted R-squared:  0.6728 
+F-statistic: 69.27 on 5 and 161 DF,  p-value: < 2.2e-16
+
+*2. nare_length*
+Coefficients:
+               Estimate Std. Error t value Pr(>|t|)    
+(Intercept)    0.003168   0.920791   0.003  0.99726    
+tarsus         0.114035   0.046329   2.461  0.01503 *  
+sexM          -0.121644   0.069710  -1.745  0.08314 .  
+sexUNK        -0.239174   0.079662  -3.002  0.00316 ** 
+site_codeWMTN -0.308416   0.061174  -5.042 1.38e-06 ***
+
+Residual standard error: 0.3598 on 143 degrees of freedom
+  (23 observations deleted due to missingness)
+Multiple R-squared:  0.219,	Adjusted R-squared:  0.1972 
+F-statistic: 10.03 on 4 and 143 DF,  p-value: 3.504e-07
+
+*3. beak_depth*
+Coefficients:
+              Estimate Std. Error t value Pr(>|t|)    
+(Intercept)    3.37922    1.20276   2.810  0.00562 ** 
+tarsus         0.15757    0.06066   2.598  0.01032 *  
+age3          -0.04197    0.08465  -0.496  0.62071    
+age4          -0.78135    0.11173  -6.993 8.29e-11 ***
+site_codeWMTN  0.23301    0.07642   3.049  0.00271 ** 
+
+Residual standard error: 0.4359 on 150 degrees of freedom
+  (16 observations deleted due to missingness)
+Multiple R-squared:  0.2691,	Adjusted R-squared:  0.2496 
+F-statistic: 13.81 on 4 and 150 DF,  p-value: 1.304e-09
+
+*4. beak_width*
+Coefficients:
+              Estimate Std. Error t value Pr(>|t|)    
+(Intercept)    3.13068    1.26675   2.471 0.014576 *  
+tarsus         0.13913    0.06376   2.182 0.030661 *  
+sexM          -0.12910    0.08557  -1.509 0.133492    
+sexUNK        -0.56717    0.12422  -4.566 1.03e-05 ***
+site_codeWMTN  0.28129    0.08189   3.435 0.000766 ***
+
+Residual standard error: 0.472 on 150 degrees of freedom
+  (16 observations deleted due to missingness)
+Multiple R-squared:  0.157,	Adjusted R-squared:  0.1345 
+F-statistic: 6.985 on 4 and 150 DF,  p-value: 3.488e-05
+
+NOT SIGNIFICANT *5. plum_length*
+Coefficients:
+              Estimate Std. Error t value Pr(>|t|)    
+(Intercept)    0.82378    0.01621  50.828  < 2e-16 ***
+age3          -0.03492    0.01790  -1.951 0.053120 .  
+age4           0.07217    0.02107   3.426 0.000813 ***
+site_codeWMTN -0.02882    0.01625  -1.774 0.078392 .  
+
+Residual standard error: 0.09031 on 135 degrees of freedom
+  (32 observations deleted due to missingness)
+Multiple R-squared:  0.1613,	Adjusted R-squared:  0.1427 
+F-statistic: 8.657 on 3 and 135 DF,  p-value: 2.699e-05
+
+*6. nodes*
+Coefficients:
+              Estimate Std. Error t value Pr(>|t|)    
+(Intercept)    9.17335    1.46944   6.243 5.54e-09 ***
+tarsus        -0.10626    0.07416  -1.433  0.15430    
+age3           0.27871    0.11660   2.390  0.01826 *  
+age4          -0.75793    0.12906  -5.872 3.34e-08 ***
+site_codeWMTN  0.26874    0.09875   2.722  0.00738 ** 
+
+Residual standard error: 0.5467 on 131 degrees of freedom
+  (35 observations deleted due to missingness)
+Multiple R-squared:  0.3402,	Adjusted R-squared:   0.32 
+F-statistic: 16.88 on 4 and 131 DF,  p-value: 3.462e-11
+
+
+The trends of how the site effects the trait need to be evaluated against my hypotheses, which were largely directional. Also, it's important to note the percent variance that's captures, as for some traits we might be missing a big part of why the trait is varying...
+
+Now the question is: how best to visualize these results.
+
+# Plotting Results
+
+```{r}
+library(emmeans)
+library(ggpubr)
+library(ggplot2)
+
+# model <- lm(nare_length ~ tarsus + sex + site_code, data=morpho.2)
+# model <- lm(beak_depth ~ tarsus + age + site_code, data=morpho.2)
+# model <- lm(beak_width ~ tarsus + sex + site_code, data=morpho.2)
+# model <- lm(plum_length ~ age + site_code, data=morpho.2)
+# model <- lm(nodes ~ tarsus + age + site_code, data=morpho.2)
+model <- lm(wing_chord ~ tarsus + age + sex + site_code, data=morpho.2)
+
+emm <- emmeans(model, ~ site_code)
+
+# Convert to a data frame for ggplot
+emm_df <- as.data.frame(emm)
+
+violin_plot <- ggplot() +
+  geom_violin(data = morpho.2, aes(x = site_code, y = wing_chord), alpha = 0, linewidth = 1) +
+  geom_crossbar(data = emm_df, aes(x = site_code, y = emmean, ymin = emmean - SE, ymax = emmean + SE), 
+                width = 0.5, color = "black", alpha = 0.5) +
+  labs(x = "Site", y = "Wing Chord (mm)") +
+  theme_classic() +
+  scale_x_discrete(labels = c("PIPA" = "WARM", "WMTN" = "COLD")) +  # Rename site_code labels
+  theme(
+    axis.title = element_text(size = 22),
+    axis.text = element_text(size = 18),
+    axis.ticks.length = unit(0.3, "cm")
+  )
+plot(violin_plot)
+file_name <- paste0("~/Desktop/GCRF/GCRF_Pub/figures/figures_output/wing_chord_plot_nocolor_updated.svg")
+svg(file_name, width = 8, height = 6)
+print(violin_plot)
+dev.off()
+
+
+
+
+# ggplot() +
+#   geom_violin(data=morpho.2, aes(x=site_code, y=beak_depth, fill=site_code)) +
+#   geom_errorbar(data=emm_df, aes(x = site_code, y = emmean, fill = site_code, ymin = emmean - SE, ymax = emmean + SE)) +
+#   labs(title = "Model-Adjusted Wing Chord Length by Site",
+#        x = "Site", y = "Wing Chord Length (mm)") +
+#   theme_minimal()
+
+violin_plot <- ggplot() +
+  geom_violin(data = morpho.2, aes(x = site_code, y = wing_chord), alpha=0, linewidth=1) +
+  geom_crossbar(data = emm_df, aes(x = site_code, y = emmean, ymin = emmean - SE, ymax = emmean + SE), width = 0.5, color = "black", alpha = 0.5) +
+  labs(title = "Plumulaceous Barbule Node Count by Site",
+       x = "Site", y = "Plumulaceous Barbule Node Count (mm)") +
+  theme_classic()
+
+violin_plot
+```
+
+
+```{r}
+model1 <- lm(tarsus~site_code + age + sex, data=morpho.2)
+model2 <- lm(tarsus~site_code + age, data=morpho.2)
+model3 <- lm(tarsus~site_code + sex, data=morpho.2)
+model4 <- lm(tarsus~age + sex, data=morpho.2)
+model5 <- lm(tarsus~age, data=morpho.2)
+model6 <- lm(tarsus~site_code, data=morpho.2)
+model7 <- lm(tarsus~sex, data=morpho.2)
+
+all.models <- list(model1,model2,model3,model4,model5,model6,model7)
+
+all.models_AIC <- aictab(all.models, sort=T, second.ord=T)
+head(all.models_AIC)
+```

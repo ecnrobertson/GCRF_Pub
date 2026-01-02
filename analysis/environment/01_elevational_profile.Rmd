@@ -1,0 +1,285 @@
+---
+title: "01_elevational_profile"
+author: "Erica Robertson"
+date: "2025-11-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir="~/Library/CloudStorage/OneDrive-Colostate/GCRF_Pub/")
+```
+
+```{r}
+library(elevatr)
+library(ggplot2)
+library(terra)
+```
+
+# Elevation Raster
+```{r}
+elev <- rast("analysis/environment/CA_elevation.tif")
+```
+
+White Mountain:
+37.634902, -118.255386
+Piute Pass:
+37.223629, -118.687127
+```{r}
+points <- data.frame(lon = c(-118.255386, -118.687127), lat = c(37.634902, 37.223629))
+pnts <- vect(points, geom = c("lon", "lat"), crs = "EPSG:4326")
+
+# Now project to match the raster CRS (EPSG:3857)
+line <- project(as.lines(pnts), elev)
+
+# Plot to confirm alignment
+plot(elev)
+lines(line, col = "red", lwd = 2)
+
+transect <- terra::extractAlong(elev, line)
+
+transect_df <- as.data.frame(transect[[2]]) # second element is the list/matrix
+transect_df$distance_m <- seq(0, nrow(transect_df)-1) * res(elev)[1]  # approximate distance if regular
+names(transect_df) <- c("elevation", "distance_m")
+
+# Convert distance to km
+transect_df$distance_km <- transect_df$distance_m / 1000
+
+# ggplot elevation profile
+ggplot(transect_df, aes(x = distance_km, y = elevation)) +
+  geom_line(color = "sienna4", linewidth = 1) +
+  theme_minimal(base_size = 14) +
+  labs(
+    x = "Distance (km)",
+    y = "Elevation (m)",
+    title = "Elevation Transect between Sierra Nevada and White Mountains"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank()
+  )
+
+```
+Trying to extend the lines out a bit
+```{r}
+bearing <- geosphere::bearing(pnts[1,], pnts[2,])
+dist <- geosphere::distGeo(pnts[1,], pnts[2,])
+
+# Extend by 5 km (5000 m) in both directions
+start_ext <- geosphere::destPoint(pnts[1,], bearing - 180, 5000)
+end_ext   <- geosphere::destPoint(pnts[2,], bearing, 5000)
+
+# Combine extended points
+extended_points <- rbind(start_ext, end_ext)
+extended <- vect(as.data.frame(extended_points), geom = c("lon", "lat"), crs = "EPSG:4326")
+
+# Create a line and project to match your DEM
+line_extended <- as.lines(extended)
+line_extended <- project(line_extended, elev)
+
+# Check visually
+plot(elev)
+lines(line_extended, col="red", lwd=2)
+
+transect.ext <- terra::extractAlong(elev, line_extended)
+
+transect.ext_df <- as.data.frame(transect.ext[[2]]) # second element is the list/matrix
+transect.ext_df$distance_m <- seq(0, nrow(transect.ext_df)-1) * res(elev)[1]  # approximate distance if regular
+names(transect.ext_df) <- c("elevation", "distance_m")
+
+# Convert distance to km
+transect.ext_df$distance_km <- transect.ext_df$distance_m / 1000
+
+# ggplot elevation profile
+ggplot(transect.ext_df, aes(x = distance_km, y = elevation)) +
+  geom_line(color = "sienna4", linewidth = 1) +
+  theme_minimal(base_size = 14) +
+  labs(
+    x = "Distance (km)",
+    y = "Elevation (m)",
+    title = "Elevation Transect between Sierra Nevada and White Mountains"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank()
+  )
+
+```
+
+# higher resolution elevation data...
+
+```{r}
+file_list <- list.files(path="analysis/environment/high_res_elev/", pattern="*.tif", all.files=TRUE, full.names=TRUE)
+
+allrasters <- lapply(file_list, rast)
+plot(allrasters[[1]])
+
+allrasters <- list()
+
+for (i in seq_along(file_list)) {
+   # Process each raster
+   raster <- rast(file_list[i])
+
+   # Aggregate the raster
+   aggregated_raster <- terra::aggregate(raster, 5)
+
+   # Store the aggregated raster
+   allrasters[[i]] <- aggregated_raster
+
+   # Print the name of the file once the aggregation is done
+   print(paste("Completed aggregation for:", basename(file_list[i])))
+ }
+
+merged <- do.call(merge, allrasters)
+
+writeRaster(merged, "analysis/environment/raw_GCRF_working_area_elev.tif")
+```
+
+Plot again.
+```{r}
+line_extended <- project(line_extended, merged)
+
+# Check visually
+plot(merged)
+lines(line_extended, col="red", lwd=2)
+
+transect.ext <- terra::extractAlong(merged, line_extended)
+
+transect.ext_df <- as.data.frame(transect.ext[[2]]) # second element is the list/matrix
+transect.ext_df$distance_m <- seq(0, nrow(transect.ext_df)-1) * res(merged)[1]  # approximate distance if regular
+names(transect.ext_df) <- c("elevation", "distance_m")
+
+# Convert distance to km
+transect.ext_df$distance_km <- transect.ext_df$distance_m / 1000
+
+# ggplot elevation profile
+ggplot(transect.ext_df, aes(x = distance_km, y = elevation)) +
+  geom_line(color = "sienna4", linewidth = 1) +
+  theme_minimal(base_size = 14) +
+  labs(
+    x = "Distance (km)",
+    y = "Elevation (m)",
+    title = "Elevation Transect between Sierra Nevada and White Mountains"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank()
+  )
+
+```
+
+# Tweaking the plot
+Dots for sample sites.
+```{r}
+points <- data.frame(
+  lon = c(-118.255386, -118.687127),
+  lat = c(37.634902, 37.223629)
+)
+
+# Convert to spatial object and project to match DEM
+sites <- vect(points, geom = c("lon", "lat"), crs = "EPSG:4326")
+sites <- project(sites, merged)
+
+transect.ext <- terra::extractAlong(merged, line_extended, xy = T) %>% rename(elevation=USGS_13_n37w118_20250514)
+
+# Compute cumulative distance along transect
+transect.ext_df <- transect.ext %>%
+  mutate(
+    # Compute segment distances in meters using geodesic distance
+    dist_m = c(0, geosphere::distGeo(cbind(x[-nrow(transect.ext)], y[-nrow(transect.ext)]),
+                                     cbind(x[-1], y[-1]))),
+    distance_m = cumsum(dist_m),
+    distance_km = distance_m / 1000
+  )
+
+range(transect.ext_df$distance_km)
+# For each site, find closest transect point
+site_coords <- crds(sites)
+
+# For each site, find closest point along transect
+site_dists <- sapply(1:nrow(site_coords), function(i) {
+  which.min(sqrt((transect.ext_df$x - site_coords[i,1])^2 +
+                 (transect.ext_df$y - site_coords[i,2])^2))
+})
+site_points <- transect.ext_df[site_dists, c("distance_km", "elevation")]
+site_points$Site <- c("White Mountains", "Piute Pass")
+```
+
+```{r}
+p <- ggplot(transect.ext_df, aes(x = distance_km, y = elevation)) +
+  geom_area(fill = "grey80", alpha = 0.8) +
+  geom_line(color = "black", linewidth = 1) +
+  geom_point(data = site_points,
+             aes(x = distance_km, y = elevation, color = Site),
+             size = 3,
+             show.legend = FALSE) +
+  scale_color_manual(values = c("White Mountains" = "blue", "Piute Pass" = "red")) +
+  coord_cartesian(ylim = c(1000, NA)) +
+  theme_minimal(base_size = 14) +
+  labs(
+    x = "Distance (km)",
+    y = "Elevation (m)")+
+  scale_x_reverse() + 
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    panel.grid = element_blank(),          # removes all grid lines
+    axis.line = element_line(color = "black"), # adds simple axes
+    panel.border = element_blank()
+  )
+
+svg("figures/figures_output/CA_elevation_profile.svg", width=7, heigh=3)
+print(p)
+dev.off()
+```
+
+
+# Tight elevation plot
+
+```{r}
+plot(sites)
+ext(sites)
+
+new.sites <- buffer(x = sites, width=15000)
+
+merged.crop <- crop(merged, y=ext(new.sites))
+
+plot(merged.crop)
+points(sites)
+```
+```{r}
+merged.crop.df <- as.data.frame(merged.crop, xy=T) %>% rename(elevation=USGS_13_n37w118_20250514)
+points
+points$site <- c("White Mountains", "Piute Pass")
+
+s <- ggplot()+
+  geom_raster(data=merged.crop.df, aes(x=x, y=y, fill=elevation))+
+  scale_fill_continuous(low = "grey2", high = "white")+
+  geom_point(data=points, aes(x=lon, y=lat, color = site),show.legend = FALSE, size=3)+
+  scale_color_manual(values = c("White Mountains" = "blue", "Piute Pass" = "red"))+
+  theme_minimal(base_size = 20) +  # increases base font size for all text
+  theme(
+    legend.position = "none",
+    axis.title.x = element_text(size = 22, face = "bold", margin = margin(t = 10)),
+    axis.title.y = element_text(size = 22, face = "bold", margin = margin(r = 10)),
+    axis.text.x  = element_text(size = 18),
+    axis.text.y  = element_text(size = 18),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    panel.border = element_blank(),
+    panel.background = element_rect(fill = "transparent", color = NA),  # transparent panel
+    plot.background = element_rect(fill = "transparent", color = NA)
+  )+
+  labs(x="Long",
+       y="Lat")
+
+plot(s)
+
+png("figures/figures_output/GCRF_sites_elev_plot_trans.png", 
+    width = 6.5, height = 5.5, units = "in", res = 600, bg="transparent")
+print(s)
+dev.off()
+```
+
+
+
+

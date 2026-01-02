@@ -1,0 +1,321 @@
+---
+title: "06_Fst_analysis"
+author: "Erica Robertson"
+date: "2025-01-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir="~/Desktop/GCRF/GCRF_Pub")
+```
+
+So we're going to run an Fst analysis using the program OutFLANK. This program takes a lot of data and so everything is going to be run on the cluster.
+
+The first thing that needs to be done is splitting up the main .vcf file, ROFI.10x.pass-maf-0.05.SNP.biallelic.8miss.rmdup.rename.vcf.gz, into smaller files based on scaffolds. I used the comms file to split them into groups of roughly the same size. When there were two scaffolds in a group I separated their names with a comma. I did all this using grep functions in bbedit, so not reproducible, sorry. The first couple lines looked like this:
+
+Scaffold_1__1_contigs__length_151072562
+Scaffold_2__1_contigs__length_114774641
+Scaffold_3__1_contigs__length_112408489
+Scaffold_4__1_contigs__length_75720081
+Scaffold_5__1_contigs__length_71959612
+Scaffold_6__1_contigs__length_71876329
+Scaffold_7__1_contigs__length_62267870
+Scaffold_8__1_contigs__length_35685229
+Scaffold_9__1_contigs__length_6533178
+Scaffold_10__1_contigs__length_4747999
+Scaffold_11__1_contigs__length_4700999
+Scaffold_12__1_contigs__length_2025999,Scaffold_13__1_contigs__length_2412999
+Scaffold_14__1_contigs__length_5954999
+
+Then I wrote a script that uses bcftools to split up the main vcf by region based on the lines in scaffold_groups.txt.
+
+```{bash}
+#!/bin/bash
+#SBATCH --job-name=subset
+#SBATCH --output=subset.%j.out
+#SBATCH --error=subset.%j.err
+#SBATCH -t 1:00:00
+#SBATCH -p amilan
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node 5
+#SBATCH --mem=12G
+#SBATCH --mail-type=END,FAIL
+#SBATCH  --mail-user=ericacnr@colostate.edu
+
+source ~/.bashrc
+
+set -x
+
+conda activate bioinf
+
+scaffold_file="/scratch/alpine/ericacnr@colostate.edu/GCRF_Pub/06.fst/scaffold_groups.txt"
+input_vcf="/scratch/alpine/ericacnr@colostate.edu/GCRF_Pub/01.fastq_processing/ROFI.10x.pass-maf-0.05.SNP.biallelic.8miss.rmdup.rename.vcf.gz"
+
+output_dir="/scratch/alpine/ericacnr@colostate.edu/GCRF_Pub/06.fst/scaffold_groups"
+
+mkdir -p "$output_dir"
+
+while IFS= read -r line; do
+  # Define the output name based on the line number
+  output_name="scaffold_group_${line_number}"
+
+  # Subset the VCF for the current group of scaffolds
+  bcftools view -r "$line" -Oz -o "$output_dir/${output_name}.vcf.gz" "$input_vcf"
+
+  # Increment line counter
+  ((line_number++))
+done < "$scaffold_file"
+```
+
+Then, because of the way that OutFLANK want it's data organized for input, I ran vcftools 012 function on all the subset vcf files to turn the snps from 0/0, 0/1, 1/1 format to 0,1,2.
+
+I ran this with a for loop that input's each vcf file from the scaffold_group directory. Have to be in the scaffold_group directory for it to work right.
+
+for vcf in `ls *.vcf.gz`; do echo $vcf; sbatch ../02.vcftools_012.sbatch $vcf ;done
+
+```{bash}
+#!/bin/bash
+#SBATCH --job-name=012
+#SBATCH --output=012.%j.out
+#SBATCH --error=012.%j.err
+#SBATCH -t 1:00:00
+#SBATCH -p amilan
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node 5
+#SBATCH --mem=12G
+#SBATCH --mail-type=END,FAIL
+#SBATCH  --mail-user=ericacnr@colostate.edu
+
+source ~/.bashrc
+
+set -x
+
+conda activate bioinf
+
+#for vcf in `ls *.vcf.gz`; do echo $vcf; sbatch ../02.vcftools_012.sbatch $vcf ;done
+
+vcf=$1
+
+vcftools --gzvcf $vcf --012 --out $vcf
+```
+
+This creates files called scaffold_group_0.vcf.gz.012, for example.
+
+Now that those are ready, I'm going to run OutFLANK on every group separately. This is done with the script creatively named OutFLANK_script.R
+
+This loops through every .vcf.gz.012 file in the directory and separately puts it into OutFLANK to get an fst output file for the group.
+```{r}
+library(vcfR)
+library(OutFLANK)
+library(data.table)
+library(tidyverse)
+
+files <- c(0,1:43)
+
+for (n in files){
+  vcf.012_path <- paste0("scaffold_groups/scaffold_group_",n,".vcf.gz.012")
+  vcf.012 <- fread(vcf.012_path)
+  #has missing data as a -1, need it to be a 9
+  for (col in seq_along(vcf.012)) {
+    set(vcf.012, i = which(vcf.012[[col]] == -1), j = col, value = 9)
+  }
+  unique(vcf.012$V2)
+  vcf.012 <- vcf.012[,-1]
+
+  #want the column names to be the snp names so the fst values are interpretable later
+  snp.pos_path <- paste0("scaffold_groups/scaffold_group_",n,".vcf.gz.012.pos")
+  snp.pos <- fread(snp.pos_path)
+  snp.pos[, result := str_c(str_extract(V1, "Scaffold_[0-9]+"), V2, sep = ".")]
+  snp.names <- snp.pos$result
+
+  #changing the colnames and removing the individuals I don't want
+  colnames(vcf.012) <- snp.names
+  SNPmat <- vcf.012[c(-98,-154:-159,-20:-23, -146),]
+
+  #the above would match the rs values, but we need the locusNames to match the SNPmat names, which are formatted differently
+  locusNames <- colnames(SNPmat)
+
+  #make a list that has the population data for all the individuals
+  #I pulled the first column from a .fam file that has the pops as 1 or 2
+  popNames <- readLines("/scratch/alpine/ericacnr@colostate.edu/GCRF_Pub/06.fst/pop_list.txt")
+
+  #now using all this to make an OutFLANK formatted input file
+  fst <- MakeDiploidFSTMat(SNPmat=SNPmat,locusNames=locusNames,popNames=popNames)
+  file_name <- paste0("scaffold_groups/scaffold_group_"n,".vcf.gz.012_fst.csv")
+  write.csv(fst, file_name)
+}
+```
+
+This is run using the script 03.OUTFLANK_script.R.sbatch
+
+```{bash, label="03.OUTFLANK_script.R.sbatch"}
+#!/bin/bash
+#SBATCH --job-name=OutFLANKtest
+#SBATCH --output=OutFLANKtest.%j.out
+#SBATCH --error=OutFLANKtest.%j.err
+#SBATCH -t 3:00:00
+#SBATCH -p amilan
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node 30
+#SBATCH --mem=100G
+#SBATCH --mail-type=END,FAIL
+#SBATCH  --mail-user=ericacnr@colostate.edu
+
+source ~/.bashrc
+
+set -x
+
+conda activate R
+
+Rscript OutFLANK_script.R
+```
+
+The output are then joined together and evaluated for outliers in the script processing_OutFLANK_output.R.
+
+```{r, label="processing_OutFLANK_output.R"}
+library(data.table)
+library(tidyverse)
+library(OutFLANK)
+
+setwd("/scratch/alpine/ericacnr@colostate.edu/GCRF_Pub/06.fst/scaffold_groups")
+
+csv_files <- list.files(pattern = "\\.csv$", full.names = TRUE)
+
+data_list <- lapply(csv_files, read.csv)
+
+names(data_list) <- basename(csv_files)
+
+combined_data <- do.call(rbind, lapply(csv_files, read.csv))
+
+
+outflank.output.01 <- OutFLANK(combined_data, LeftTrimFraction=0.05,
+         RightTrimFraction=0.005, Hmin=0.2, 2,
+         qthreshold=0.01)
+
+png("../fst_plot_.01.png", width = 800, height = 600)  # Open a PNG device and specify size
+
+fst.plot <- OutFLANKResultsPlotter(outflank.output.01,
+                                   withOutliers = TRUE,
+                                   NoCorr = TRUE,
+                                   Hmin = 0.2,
+                                   binwidth = 0.005,
+                                   Zoom = TRUE,
+                                   RightZoomFraction = 0.01,
+                                   titletext = NULL)
+dev.off()
+
+str(outflank.output.01)
+
+fst.results <- outflank.output.01$results
+colnames(fst.results)[colnames(fst.results) == "LocusName"] <- "rs"
+write.csv(fst.results, "../OutFLANK_fst_results.csv")
+```
+
+This outputs a plot of the fst values past the 0.1 threshold (to get a better look at the tail end of the snps) as well as a final OutFLANK_fst_results.csv to the 06.fst directory.
+
+It's run using
+```{bash, label="04.processing_OutFLANK_output.R.sbatch"}
+#!/bin/bash
+#SBATCH --job-name=OutFLANKproc
+#SBATCH --output=OutFLANKproc.%j.out
+#SBATCH --error=OutFLANKproc.%j.err
+#SBATCH -t 3:00:00
+#SBATCH -p amilan
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node 30
+#SBATCH --mem=100G
+#SBATCH --mail-type=END,FAIL
+#SBATCH  --mail-user=ericacnr@colostate.edu
+
+source ~/.bashrc
+
+set -x
+
+conda activate R
+
+Rscript processing_OutFLANK_output.R
+```
+
+List of 6
+ $ FSTbar               : num 0.00449
+ $ FSTNoCorrbar         : num 0.0141
+ $ dfInferred           : num 2
+ $ numberLowFstOutliers : int 0
+ $ numberHighFstOutliers: int 831
+ $ results              :'data.frame':  7739399 obs. of  16 variables:
+  ..$ X               : int [1:7739399] 1 2 3 4 5 6 7 8 9 10 ...
+  ..$ LocusName       : chr [1:7739399] "Scaffold_1.195" "Scaffold_1.213" "Scaffold_1.683" "Scaffold_1.751" ...
+  ..$ He              : num [1:7739399] 0.12 0.183 0.133 0.184 0.117 ...
+  ..$ FST             : num [1:7739399] -0.011958 -0.014773 -0.002232 0.000773 -0.008151 ...
+  ..$ T1              : num [1:7739399] -7.16e-04 -1.35e-03 -1.49e-04 7.16e-05 -4.78e-04 ...
+  ..$ T2              : num [1:7739399] 0.0599 0.0913 0.0666 0.0926 0.0587 ...
+  ..$ FSTNoCorr       : num [1:7739399] 0.00155 0.00055 0.00885 0.01648 0.00333 ...
+  ..$ T1NoCorr        : num [1:7739399] 9.31e-05 5.03e-05 5.90e-04 1.53e-03 1.95e-04 ...
+  ..$ T2NoCorr        : num [1:7739399] 0.06 0.0914 0.0666 0.0927 0.0587 ...
+  ..$ meanAlleleFreq  : num [1:7739399] 0.936 0.898 0.929 0.898 0.938 ...
+  ..$ indexOrder      : int [1:7739399] 1 2 3 4 5 6 7 8 9 10 ...
+  ..$ GoodH           : chr [1:7739399] "lowH" "lowH" "lowH" "lowH" ...
+  ..$ qvalues         : num [1:7739399] NA NA NA NA NA ...
+  ..$ pvalues         : num [1:7739399] NA NA NA NA NA ...
+  ..$ pvaluesRightTail: num [1:7739399] NA NA NA NA NA ...
+  ..$ OutlierFlag     : logi [1:7739399] FALSE FALSE FALSE FALSE FALSE FALSE ...
+  
+$FSTbar: Mean FST of loci not flagged as outliers, using the sample-size correction (recommend reporting in publication)
+$FSTNoCorrbar: Mean FST of loci not flagged as outliers, without using the sample-size correction
+$dfInferred: Inferred df for the chi-square distribution from the OutFLANK procedure (recommend reporting in publication).
+$numberLowFstOutliers: Number of loci flagged as having a significantly low FST (not reliable)
+$numberHighFstOutliers: Number of loci flagged as having a significantly high FST.
+$results: a data frame with a row for each locus. This data frame includes all the original columns in the input data set, and six new ones:
+$results$indexOrder: the original row number of the locus in the input data set
+$results$GoodH: Boolean variable which is TRUE if the expected heterozygosity is greater than the Hemin set by the input to OutFLANK
+$results$OutlierFlag: TRUE if the method identifies the locus as an outlier, FALSE otherwise, based on the q-threshold
+$results$q: the q-value for the test of neutrality for the locus, based on the right-tailed P-value.
+$results$pvalues: the two-tailed P-value for the test of neutrality for the locus. Not reliable, because OutFLANK does not predict the left-tailed P-values well.
+$results$pvaluesRightTail: the one-sided (right tail) P-value for the locus
+
+
+
+Then, we move that output over here to process and plot the results.
+
+```{bash}
+rsync -avzP ericacnr@colostate.edu@login.rc.colorado.edu:/scratch/alpine/ericacnr@colostate.edu/GCRF_Pub/06.fst/OutFLANK_fst_results_0.005.csv /Users/ericarobertson/Desktop/GCRF/GCRF_Pub/analysis/Fst/OutFLANK_output
+```
+
+You can try and do this on your own computer but mine really struggles... I'm going to do this in an interactive node on the cluster
+```{r}
+library(data.table)
+library(dplyr)
+fst.results <- fread("analysis/Fst/OutFLANK_output/OutFLANK_fst_results_0.005.csv")
+fst.nona <- na.omit(fst.results$FST)
+outliers <- fst.results %>% filter(OutlierFlag==TRUE) %>% select(rs, FST)
+mean(outliers$FST)
+min(outliers$FST)
+max(outliers$FST)
+
+write.csv(outliers, "results/fst_OutFLANK/OutFLANK_0.005FDR_outliers.csv", row.names = F)
+```
+
+```{bash}
+rsync -avzP ericacnr@colostate.edu@login.rc.colorado.edu:/scratch/alpine/ericacnr@colostate.edu/GCRF_Pub/06.fst/OutFLANK_outliers.csv /Users/ericarobertson/Desktop/GCRF/GCRF_Pub/results/fst_OutFLANK
+```
+
+```{r}
+fst_outliers <- read.csv("results/fst_OutFLANK/OutFLANK_0.005FDR_outliers.csv")
+nrow(fst_outliers)
+
+quantile_99 <- quantile(fst_outliers$FST, probs = 0.90, na.rm = TRUE)
+print(quantile_99)
+
+min(fst_outliers$FST)
+mean(fst_outliers$FST)
+
+fst_outliers.2 <- fst_outliers %>% filter(FST>= 0.2)
+nrow(fst_outliers.2)
+mean(fst_outliers.2$FST)
+
+fst_outliers.3 <- fst_outliers %>% filter(FST>= 0.23)
+nrow(fst_outliers.3)
+
+write.csv(fst_outliers.3, "results/fst_OutFLANK/OutFLANK_outliers.23FST.csv", row.names = F)
+```

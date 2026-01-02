@@ -1,0 +1,152 @@
+---
+title: "03_t-tests_on_residuals"
+author: "Erica Robertson"
+date: "2025-01-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir="~/Desktop/GCRF/GCRF_Pub/")
+```
+
+First, read in the data. I'm also just going to filter out the sites I'm not interested in at this point.
+```{r}
+residuals <- read.csv("results/stats_output/GCRF_residuals_all.csv") %>% filter(site_code %in% c("WMTN","PIPA"))
+colnames(residuals)
+```
+
+The loop through a run a t-test on each, based on if the residuals are normal or not....
+
+I'm going to do a multiple testing adjustment so I'm going to do the body trait and the feather traits separately...
+
+```{r}
+body_traits <- c("wing_chord", "tail_length", "nare_length", "culmen_end_length", 
+            "beak_depth", "beak_width")
+
+# Define the direction for each trait (either "greater", "lesser", or "two.sided")
+# PIPA warmer than WMNT
+# PIPA versus WMNT, if PIPA > WMNT then "greater"
+directions <- c("two.sided", "two.sided", "greater", "greater",
+                "less", "less")  # Modify as needed for each trait
+
+# Initialize a vector to store the significant traits and their p-values
+
+results_df <- data.frame()
+p_values <- c()  # Vector to store p-values for multiple testing correction
+
+# Loop through traits
+for (i in seq_along(body_traits)) {
+  trait_name <- body_traits[i]
+  print(trait_name)
+  column_name <- paste0(trait_name,"_res")
+  direction <- directions[i]  # Get the direction for the current trait
+
+  # Create the dataframe for the current trait and site_code
+  df <- na.omit(data.frame(site_code = as.factor(residuals[, 5]), 
+                           trait = residuals[[column_name]]))
+  colnames(df)[2] <- "trait"
+  # Normality test
+  norm <- shapiro.test(df[,2])
+
+  if (norm$p.value <= 0.05) {
+    # If not normal, apply Wilcoxon test with direction
+    not.norm.test <- wilcox.test(trait ~ site_code, data = df, alternative = direction)
+    not.norm.p <- not.norm.test$p.value
+    p_values <- c(p_values, not.norm.p)  # Add p-value to vector
+    result <- data.frame(trait=trait_name,test="wc_test",direction=direction,p_value=not.norm.p)
+    results_df <- rbind(results_df, result)
+    next  # Skip the t-test for this trait
+  }
+  
+  # If normal, apply t-test with direction
+  norm.test <- t.test(trait ~ site_code, data = df, alternative = direction)
+  norm.p <- norm.test$p.value
+  p_values <- c(p_values, norm.p)  # Add p-value to vector
+  result <- data.frame(trait=trait_name, test="t_test",direction=direction,p_value=norm.p)
+  results_df <- rbind(results_df, result)
+}
+
+# Apply BH adjustment to the p-values
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+
+body_results_df <- cbind(results_df, adjusted_p_values)
+
+# Filter significant traits based on adjusted p-values
+significant_body_results <- body_results_df %>% filter(adjusted_p_values <= 0.05)
+
+# Create a data frame with the significant results and their adjusted p-values
+
+write.csv(significant_body_results, "results/stats_output/t-test_body_adjusted_results.csv", row.names = FALSE)
+
+# Print the significant results
+print(significant_body_results)
+
+```
+```{r}
+feather_traits <- c("pen_length", "pen_num", "plum_length", "plum_number", 
+            "nodes")
+
+# Define the direction for each trait (either "greater", "lesser", or "two.sided")
+# PIPA warmer than WMNT
+# PIPA versus WMNT, if PIPA > WMNT then "greater"
+directions <- c("greater", "greater",
+                "greater", "less", "less")
+
+# Initialize a vector to store the significant traits and their p-values
+results_df <- data.frame()
+p_values <- c()  # Vector to store p-values for multiple testing correction
+
+# Loop through traits
+for (i in seq_along(feather_traits)) {
+  trait_name <- feather_traits[i]
+  print(trait_name)
+  column_name <- paste0(trait_name,"_res")
+  print(column_name)
+  direction <- directions[i]  # Get the direction for the current trait
+
+  # Create the dataframe for the current trait and site_code
+  df <- na.omit(data.frame(site_code = as.factor(residuals[, 5]), 
+                           trait = residuals[[column_name]]))
+  colnames(df)[2] <- "trait"
+  # Normality test
+  norm <- shapiro.test(df[,2])
+
+  if (norm$p.value <= 0.05) {
+    # If not normal, apply Wilcoxon test with direction
+    not.norm.test <- wilcox.test(trait ~ site_code, data = df, alternative = direction)
+    not.norm.p <- not.norm.test$p.value
+    p_values <- c(p_values, not.norm.p)  # Add p-value to vector
+    result <- data.frame(trait=trait_name,test="wc_test",direction=direction,p_value=not.norm.p)
+    results_df <- rbind(results_df, result)
+    next  # Skip the t-test for this trait
+  }
+  
+  # If normal, apply t-test with direction
+  norm.test <- t.test(trait ~ site_code, data = df, alternative = direction)
+  norm.p <- norm.test$p.value
+  p_values <- c(p_values, norm.p)  # Add p-value to vector
+  result <- data.frame(trait=trait_name, test="t_test",direction=direction,p_value=norm.p)
+  results_df <- rbind(results_df, result)
+}
+
+# Apply BH adjustment to the p-values
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+
+feather_results_df <- cbind(results_df, adjusted_p_values)
+
+# Filter significant traits based on adjusted p-values
+significant_feather_results <- feather_results_df %>% filter(adjusted_p_values <= 0.05)
+
+# Create a data frame with the significant results and their adjusted p-values
+
+write.csv(significant_feather_results, "results/stats_output/t-test_feather_adjusted_results.csv", row.names = FALSE)
+
+# Print the significant results
+print(significant_feather_results)
+
+```
+
+
+
+```
